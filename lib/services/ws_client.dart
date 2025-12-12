@@ -32,23 +32,38 @@ class WSClient {
     }
 
     _channel!.stream.listen((message) {
-      // Parse incoming messages from backend (plain JSON)
+      // Parse incoming messages from backend (encrypted or plain JSON)
       try {
         final str = message.toString();
         print('📩 WS message received (${str.length} chars)');
         
-        final data = json.decode(str);
+        Map<String, dynamic> data;
+        
+        // 🔐 Try to decrypt if it looks like hex (no { character)
+        if (!str.contains('{')) {
+          try {
+            data = decryptHexToObject(str);
+            print('🔓 DECRYPTED message type: ${data['type']}');
+          } catch (decryptError) {
+            print('⚠️ Decryption failed, trying plain JSON: $decryptError');
+            data = json.decode(str);
+          }
+        } else {
+          // Plain JSON
+          data = json.decode(str);
+        }
+        
         if (data is Map<String, dynamic>) {
           final type = data['type'];
           final payload = data['payload'];
           
           if (type == 'destination' && payload is Map<String, dynamic>) {
-            print('🎯 DESTINATION: ${payload['lat']}, ${payload['lng']}');
+            print('🎯 DESTINATION (🔐 secured): ${payload['lat']}, ${payload['lng']}');
             _destinationController.add(payload);
           } else if (type == 'speedLimit' && payload is Map<String, dynamic>) {
             final limit = payload['speedLimit'];
             if (limit is num) {
-              print('🚦 SPEED LIMIT: $limit km/h');
+              print('🚦 SPEED LIMIT (🔐 secured): $limit km/h');
               _speedLimitController.add(limit.toDouble());
             }
           } else {
@@ -90,12 +105,19 @@ class WSClient {
       'payload': payload,
     };
     
-    // Send as plain JSON for now (encryption can be added later)
+    // 🔐 Send encrypted for peak security
     try {
-      _channel!.sink.add(json.encode(envelope));
-      print('✓ Sent location: ${payload['lat']}, ${payload['lng']}');
-    } catch (e) {
-      print('❌ Failed to send location: $e');
+      final encrypted = encryptObjectToHex(envelope);
+      _channel!.sink.add(encrypted);
+      print('🔐 Sent ENCRYPTED location: ${payload['lat']}, ${payload['lng']} (${encrypted.length} bytes)');
+    } catch (encryptError) {
+      print('⚠️ Encryption failed, falling back to plain JSON: $encryptError');
+      try {
+        _channel!.sink.add(json.encode(envelope));
+        print('✓ Sent location (plain): ${payload['lat']}, ${payload['lng']}');
+      } catch (e) {
+        print('❌ Failed to send location: $e');
+      }
     }
   }
 
