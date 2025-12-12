@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:iot/services/ws_client.dart';
 
 class DriverMap extends StatefulWidget {
   const DriverMap({Key? key}) : super(key: key);
@@ -16,6 +17,8 @@ class DriverMap extends StatefulWidget {
 class _DriverMapState extends State<DriverMap> {
   final MapController _mapController = MapController();
   StreamSubscription<Position>? _posSub;
+  StreamSubscription<Map<String, dynamic>>? _destSub;
+  StreamSubscription<double>? _speedLimitSub;
   LatLng? _current;
   LatLng? _destination;
   bool _follow = true;
@@ -25,6 +28,84 @@ class _DriverMapState extends State<DriverMap> {
   void initState() {
     super.initState();
     _initLocation();
+    _listenForDestination();
+    _listenForSpeedLimit();
+  }
+  
+  void _listenForSpeedLimit() {
+    // Listen for speed limit updates from backend via WebSocket
+    _speedLimitSub = wsClient.speedLimitStream.listen((speedLimit) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.speed, color: Colors.white),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '🚦 Speed Limit Updated: ${speedLimit.toStringAsFixed(0)} km/h',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.blue,
+            duration: Duration(seconds: 4),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    });
+  }
+
+  void _listenForDestination() {
+    // Listen for destination updates from backend via WebSocket
+    _destSub = wsClient.destinationStream.listen((payload) {
+      try {
+        final lat = payload['lat'];
+        final lng = payload['lng'];
+        if (lat is num && lng is num) {
+          final newDest = LatLng(lat.toDouble(), lng.toDouble());
+          setState(() {
+            _destination = newDest;
+            _waypoints.clear();
+            _waypoints.add(newDest);
+          });
+          
+          // Show notification to driver
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    Icon(Icons.location_on, color: Colors.white),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '🎯 New Destination Received!\n${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 4),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+          
+          // Animate camera to show both current and destination
+          if (_current != null) {
+            _mapController.move(newDest, 10);
+          }
+          print('✓ Destination updated: ${newDest.latitude}, ${newDest.longitude}');
+        }
+      } catch (e) {
+        print('❌ Error parsing destination: $e');
+      }
+    });
   }
 
   Future<void> _initLocation() async {
@@ -41,9 +122,24 @@ class _DriverMapState extends State<DriverMap> {
 
     _posSub = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
       final latlng = LatLng(pos.latitude, pos.longitude);
+      print('📍 GPS Position: ${pos.latitude}, ${pos.longitude} | Accuracy: ${pos.accuracy}m | Speed: ${(pos.speed * 3.6).toStringAsFixed(1)} km/h');
+      
       setState(() {
         _current = latlng;
       });
+      try {
+        // Send location envelope to backend via WS client
+        wsClient.sendLocation({
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'speed': (pos.speed.isNaN ? 0.0 : pos.speed * 3.6), // km/h
+          'heading': pos.heading ?? 0.0,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+          'accuracy': pos.accuracy,
+        });
+      } catch (e) {
+        print('❌ Failed to send location: $e');
+      }
       // keep map centered on user
       try {
         if (_follow) {
@@ -87,6 +183,8 @@ class _DriverMapState extends State<DriverMap> {
   @override
   void dispose() {
     _posSub?.cancel();
+    _destSub?.cancel();
+    _speedLimitSub?.cancel();
     super.dispose();
   }
 
@@ -270,51 +368,7 @@ class _DriverMapState extends State<DriverMap> {
               ],
             ),
           ),
-        // Follow & clear buttons overlay
-        PositionedButtons(
-          follow: _follow,
-          onToggleFollow: () => setState(() => _follow = !_follow),
-          onClear: () => setState(() {
-            _waypoints.clear();
-            _destination = null;
-          }),
-        ),
       ],
-    );
-  }
-}
-
-class PositionedButtons extends StatelessWidget {
-  final bool follow;
-  final VoidCallback onToggleFollow;
-  final VoidCallback onClear;
-
-  const PositionedButtons({Key? key, required this.follow, required this.onToggleFollow, required this.onClear}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      right: 16,
-      bottom: 140,
-      child: Column(
-        children: [
-          FloatingActionButton.small(
-            heroTag: 'follow',
-            onPressed: onToggleFollow,
-            backgroundColor: follow ? Theme.of(context).colorScheme.primary : Colors.white,
-            foregroundColor: follow ? Colors.white : Colors.black87,
-            child: const Icon(Icons.my_location),
-          ),
-          const SizedBox(height: 8),
-          FloatingActionButton.small(
-            heroTag: 'clear',
-            onPressed: onClear,
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black87,
-            child: const Icon(Icons.clear),
-          ),
-        ],
-      ),
     );
   }
 }
