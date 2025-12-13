@@ -18,9 +18,9 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "8.7.0" apply false
-    // Bump Kotlin to 1.9.x to match plugin dependencies compiled with newer Kotlin
-    id("org.jetbrains.kotlin.android") version "1.9.20" apply false
+    id("com.android.application") version "8.9.1" apply false
+    // Bump Kotlin to 2.1.x to match plugin dependencies compiled with newer Kotlin
+    id("org.jetbrains.kotlin.android") version "2.1.0" apply false
 }
 
 include(":app")

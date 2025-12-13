@@ -120,6 +120,33 @@ class WSClient {
       }
     }
   }
+  
+  void sendAlert(Map<String, dynamic> payload) {
+    if (_channel == null) {
+      print('❌ Cannot send alert - WebSocket not connected');
+      return;
+    }
+    final envelope = {
+      'type': 'alert',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'payload': payload,
+    };
+    
+    // 🔐 Send encrypted alert
+    try {
+      final encrypted = encryptObjectToHex(envelope);
+      _channel!.sink.add(encrypted);
+      print('🔐 Sent ENCRYPTED alert: ${payload['type']} (${encrypted.length} bytes)');
+    } catch (encryptError) {
+      print('⚠️ Encryption failed, falling back to plain JSON: $encryptError');
+      try {
+        _channel!.sink.add(json.encode(envelope));
+        print('✓ Sent alert (plain): ${payload['type']}');
+      } catch (e) {
+        print('❌ Failed to send alert: $e');
+      }
+    }
+  }
 
   void dispose() {
     _reconnect?.cancel();

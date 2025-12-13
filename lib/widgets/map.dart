@@ -23,6 +23,8 @@ class _DriverMapState extends State<DriverMap> {
   LatLng? _destination;
   bool _follow = true;
   final List<LatLng> _waypoints = [];
+  double? _currentSpeedLimit;
+  DateTime? _lastSpeedAlert;
 
   @override
   void initState() {
@@ -35,6 +37,10 @@ class _DriverMapState extends State<DriverMap> {
   void _listenForSpeedLimit() {
     // Listen for speed limit updates from backend via WebSocket
     _speedLimitSub = wsClient.speedLimitStream.listen((speedLimit) {
+      setState(() {
+        _currentSpeedLimit = speedLimit;
+      });
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -44,19 +50,92 @@ class _DriverMapState extends State<DriverMap> {
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '🚦 Speed Limit Updated: ${speedLimit.toStringAsFixed(0)} km/h',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                    '🚦 Speed Limit Set: ${speedLimit.toStringAsFixed(0)} km/h',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ),
               ],
             ),
-            backgroundColor: Colors.blue,
+            backgroundColor: Colors.blue.shade700,
             duration: Duration(seconds: 4),
             behavior: SnackBarBehavior.floating,
           ),
         );
       }
+      print('🚦 Speed limit updated: $speedLimit km/h');
     });
+  }
+  
+  void _checkSpeedLimit(double currentSpeed) {
+    if (_currentSpeedLimit == null) return;
+    
+    // Check if speed exceeds limit
+    if (currentSpeed > _currentSpeedLimit!) {
+      // Throttle alerts - only show once every 5 seconds
+      final now = DateTime.now();
+      if (_lastSpeedAlert != null && now.difference(_lastSpeedAlert!).inSeconds < 5) {
+        return;
+      }
+      
+      _lastSpeedAlert = now;
+      
+      // Show alert on mobile
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.warning, color: Colors.white, size: 28),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '⚠️ SPEED LIMIT EXCEEDED!',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Current: ${currentSpeed.toStringAsFixed(0)} km/h | Limit: ${_currentSpeedLimit!.toStringAsFixed(0)} km/h',
+                        style: TextStyle(fontSize: 14),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.red.shade700,
+            duration: Duration(seconds: 5),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      
+      // Send alert to backend with complete information
+      try {
+        final alertId = 'ALERT-${DateTime.now().millisecondsSinceEpoch}';
+        final currentPos = _current;
+        
+        wsClient.sendAlert({
+          'id': alertId,
+          'type': 'speedLimit',
+          'speed': currentSpeed,
+          'currentSpeed': currentSpeed,
+          'speedLimit': _currentSpeedLimit,
+          'lat': currentPos?.latitude ?? 0.0,
+          'lng': currentPos?.longitude ?? 0.0,
+          'deviceId': 'MOBILE-001',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+          'acknowledged': false,
+          'message': 'Speed limit exceeded: ${currentSpeed.toStringAsFixed(1)} km/h (limit: ${_currentSpeedLimit!.toStringAsFixed(0)} km/h)',
+        });
+        print('⚠️ Speed alert sent to backend: $currentSpeed km/h > ${_currentSpeedLimit} km/h at ${currentPos?.latitude.toStringAsFixed(4)}, ${currentPos?.longitude.toStringAsFixed(4)}');
+      } catch (e) {
+        print('❌ Failed to send speed alert: $e');
+      }
+    }
   }
 
   void _listenForDestination() {
@@ -122,17 +201,22 @@ class _DriverMapState extends State<DriverMap> {
 
     _posSub = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
       final latlng = LatLng(pos.latitude, pos.longitude);
-      print('📍 GPS Position: ${pos.latitude}, ${pos.longitude} | Accuracy: ${pos.accuracy}m | Speed: ${(pos.speed * 3.6).toStringAsFixed(1)} km/h');
+      final speedKmh = pos.speed.isNaN ? 0.0 : pos.speed * 3.6;
+      print('📍 GPS Position: ${pos.latitude}, ${pos.longitude} | Accuracy: ${pos.accuracy}m | Speed: ${speedKmh.toStringAsFixed(1)} km/h');
       
       setState(() {
         _current = latlng;
       });
+      
+      // Check speed limit
+      _checkSpeedLimit(speedKmh);
+      
       try {
         // Send location envelope to backend via WS client
         wsClient.sendLocation({
           'lat': pos.latitude,
           'lng': pos.longitude,
-          'speed': (pos.speed.isNaN ? 0.0 : pos.speed * 3.6), // km/h
+          'speed': speedKmh,
           'heading': pos.heading ?? 0.0,
           'timestamp': DateTime.now().millisecondsSinceEpoch,
           'accuracy': pos.accuracy,

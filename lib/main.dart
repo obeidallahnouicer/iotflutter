@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:iot/screens/homepage.dart';
+import 'package:iot/screens/biometric_auth.dart';
 import 'package:iot/services/ws_client.dart';
 
 Future<void> main() async {
@@ -41,7 +41,12 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      home: const HomePage(),
+      title: 'IoT Vehicle Tracker',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        useMaterial3: true,
+      ),
+      home: const BiometricAuth(),
     );
   }
 }
